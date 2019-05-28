@@ -3,7 +3,9 @@ package chef
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	chefcrypto "github.com/bhoriuchi/go-chef-crypto"
 	"github.com/hashicorp/terraform/helper/schema"
 
 	chefc "github.com/go-chef/chef"
@@ -27,6 +29,18 @@ func resourceChefDataBagItem() *schema.Resource {
 				ForceNew:  true,
 				StateFunc: jsonStateFunc,
 			},
+			"secret_key": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				ForceNew:    true,
+				DefaultFunc: schema.EnvDefaultFunc("CHEF_SECRET_KEY", ""),
+			},
+			"encryption_version": {
+				Type:        schema.TypeInt,
+				Optional:    true,
+				ForceNew:    true,
+				DefaultFunc: schema.EnvDefaultFunc("CHEF_ENCRYPTION_VERSION", chefcrypto.VersionLatest),
+			},
 		},
 	}
 }
@@ -35,10 +49,11 @@ func CreateDataBagItem(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*chefc.Client)
 
 	dataBagName := d.Get("data_bag_name").(string)
-	itemId, itemContent, err := prepareDataBagItemContent(d.Get("content_json").(string))
-	if err != nil {
-		return err
-	}
+	itemId, itemContent, err := prepareDataBagItemContent(
+		d.Get("content_json").(string),
+		strings.TrimSpace(d.Get("secret_key").(string)),
+		d.Get("encryption_version").(int),
+	)
 
 	err = client.DataBags.CreateItem(dataBagName, itemContent)
 	if err != nil {
@@ -51,35 +66,7 @@ func CreateDataBagItem(d *schema.ResourceData, meta interface{}) error {
 }
 
 func ReadDataBagItem(d *schema.ResourceData, meta interface{}) error {
-	client := meta.(*chefc.Client)
-
-	// The Chef API provides no API to read a data bag's metadata,
-	// but we can try to read its items and use that as a proxy for
-	// whether it still exists.
-
-	itemId := d.Id()
-	dataBagName := d.Get("data_bag_name").(string)
-
-	value, err := client.DataBags.GetItem(dataBagName, itemId)
-	if err != nil {
-		if errRes, ok := err.(*chefc.ErrorResponse); ok {
-			if errRes.Response.StatusCode == 404 {
-				d.SetId("")
-				return nil
-			}
-		} else {
-			return err
-		}
-	}
-
-	jsonContent, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-
-	d.Set("content_json", string(jsonContent))
-
-	return nil
+	return dataSourceDataBagItemRead(d, meta)
 }
 
 func DeleteDataBagItem(d *schema.ResourceData, meta interface{}) error {
@@ -96,7 +83,7 @@ func DeleteDataBagItem(d *schema.ResourceData, meta interface{}) error {
 	return err
 }
 
-func prepareDataBagItemContent(contentJson string) (string, interface{}, error) {
+func prepareDataBagItemContent(contentJson, secretKey string, encryptionVersion int) (string, interface{}, error) {
 	var value map[string]interface{}
 	err := json.Unmarshal([]byte(contentJson), &value)
 	if err != nil {
@@ -110,6 +97,27 @@ func prepareDataBagItemContent(contentJson string) (string, interface{}, error) 
 
 	if itemId == "" {
 		return "", nil, fmt.Errorf("content_json must have id attribute, set to a string")
+	}
+
+	// if a secretKey was passed, encrypt the data bag item data
+	for key, val := range value {
+		// do not encrypt the id, it should never be encrypted
+		if key == "id" {
+			continue
+		}
+
+		// marshal the value to a json string
+		jsonData, err := json.Marshal(val)
+		if err != nil {
+			return "", nil, err
+		}
+
+		// encrypt the value and set it on the map
+		encryptedItem, err := chefcrypto.Encrypt([]byte(secretKey), []byte(jsonData), encryptionVersion)
+		if err != nil {
+			return "", nil, err
+		}
+		value[key] = encryptedItem
 	}
 
 	return itemId, value, nil

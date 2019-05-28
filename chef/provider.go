@@ -59,6 +59,10 @@ func Provider() terraform.ResourceProvider {
 			"chef_role":          resourceChefRole(),
 		},
 
+		DataSourcesMap: map[string]*schema.Resource{
+			"chef_data_bag_item": dataSourceDataBagItem(),
+		},
+
 		ConfigureFunc: providerConfigure,
 	}
 }
