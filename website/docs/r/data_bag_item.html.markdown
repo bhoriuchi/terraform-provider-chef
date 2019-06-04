@@ -40,6 +40,11 @@ The following arguments are supported:
   the content of the item. Must at minimum contain a property called "id"
   that is unique within the data bag, which will become the identifier of
   the created item.
+* `secret_key` - (Optional) A string containing a secret key that can be used
+  to encrypt the data bag item. When specified, the data bag item will be
+  encrypted before it is stored remotely.
+* `encryption_version` - (Optional) The version of data bag encryption to use.
+  Defaults to the latest supported version if unset.
 
 ## Attributes Reference
 
